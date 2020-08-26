@@ -1,0 +1,546 @@
+import java.awt.*;
+import javax.swing.*;
+import java.util.*;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.FileNotFoundException;
+
+/**
+  * Class GuiRDP
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a file using the grammar defined in Project1.pdf
+  */
+class GuiRDP {
+  private static JFrame warning = new JFrame("Warning");
+  private static ArrayList<String> tokens = new ArrayList<>();
+  private static Gui rootNode;
+
+  //Accepts a single argument for the name of the input file
+  public static void main(String args[]) {
+    String fname = "input";
+    //String currToken = "";
+    ListIterator<String> iterateTokens; //A normal Iterator cannot peek ahead
+
+    if(args.length>0) fname = args[0];
+    populate(readFile(fname));
+    iterateTokens = tokens.listIterator();  //must be assigned after calling populate() to avoid throwing a ConcurrentModificationException
+    rootNode = new Gui(iterateTokens);
+
+    try{
+      if(iterateTokens.hasNext() && rootNode.isKeyword(iterateTokens.next())) {
+        rootNode.parse();
+      } else throw new ParseError("Improper grammar when defining Window.");
+      //also catches ParseError from rootNode.parse() and any methods it calls
+    } catch(ParseError err) {
+      JOptionPane.showMessageDialog(warning, err);
+    }
+
+    warning.dispose();
+  }
+
+  //Reads input file 'fname' and returns an Arraylist, one element per line
+  private static ArrayList<String> readFile(String fname) {
+    ArrayList<String> lines = new ArrayList<>();
+    String tempLine = null;
+
+    try {
+      BufferedReader in = new BufferedReader(new FileReader(fname));
+      while((tempLine = in.readLine()) != null)
+        lines.add(tempLine);
+      in.close();
+      //JOptionPane.showMessageDialog(warning,"File read successfully.");
+    } catch(FileNotFoundException err) {
+      JOptionPane.showMessageDialog(warning,"File did not open.");
+    } catch(IOException err) {
+      JOptionPane.showMessageDialog(warning,"There was a problem reading from the file.");
+    }
+
+    return lines;
+  }
+
+  private static void populate(ArrayList<String> s) {
+    Iterator<String> iterateLines = s.iterator();
+    ArrayList<String> line; //since awt contains a List class, must reference specifically
+    String[] lineArray;
+
+    while(iterateLines.hasNext()) {
+      lineArray = iterateLines.next().split(" ");
+      line = new ArrayList<String>(Arrays.asList(lineArray));
+      tokens.addAll(line);
+    }
+  }
+} //END CLASS GuiRDP
+
+
+/**
+  * Class Gui
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a single production, forms root node of parse tree.
+  *   gui ::=
+  *      Window STRING '(' NUMBER ',' NUMBER ')' layout widgets End '.'
+  */
+class Gui extends ParseTreeNode {
+  private Layout childLayout;
+  private Widgets childWidgets;
+
+  public Gui(ListIterator<String> itr) {
+    keywords = new String[]{"Window"};
+    this.itr = itr;
+  }
+
+  //Checks each token of ArrayList<String> against the definition of gui, recursive to children of this node on the parse tree, childLayout and childWidgets
+  //TODO: remember to check at the end that we have all class variables needed in the tree and that layoutType adheres to its type definition, same for widget, widgets and layout_type.
+  public boolean parse() throws ParseError {
+    this.haveAttr.put("name",false);
+    this.haveAttr.put("width",false);
+    this.haveAttr.put("height",false);
+    this.haveAttr.put("childLayout",false);
+    this.haveAttr.put("childWidgets",false);
+    this.hangingParen = false;
+
+    //Begin parsing tokens sequentially and building parse tree top-down
+    while(itr.hasNext()) {
+      this.currToken = itr.next();
+      if(!this.haveAttr.get("name")) {
+        parseName();
+        parseOpenParen();
+      }
+      while(this.hangingParen) parseNumber();
+
+      //after revamping parseNumber(), the iteration below became needed
+      if(this.itr.hasNext()) this.currToken = this.itr.next();
+      else throw new ParseError("Improper layout definition.");
+
+      if(this.haveAttr.get("name") && this.haveAttr.get("width") && this.haveAttr.get("height") && this.hangingParen==false) {
+        if(!this.haveAttr.get("childLayout")) {
+          this.childLayout = new Layout(this.itr);
+          if(this.childLayout.isKeyword(this.currToken) && this.childLayout.parse()) this.haveAttr.put("childLayout",true);
+          else throw new ParseError("Improper grammar when defining layout.");
+        }
+        if(!this.haveAttr.get("childWidgets")) {
+          this.childWidgets = new Widgets(this.itr);
+    System.out.println("[DBG]"+this.currToken+" "+this.childWidgets.isKeyword(this.currToken));
+
+          if(this.itr.hasNext()) this.currToken = this.itr.next();
+          else throw new ParseError("Improper grammar when defining widgets.1");
+          if(this.childWidgets.isKeyword(this.currToken) && this.childWidgets.parse()) this.haveAttr.put("childWidgets",true);
+          else throw new ParseError("Improper grammar when defining widgets.2");
+        }
+      }
+
+      //Match "End." or "End ." to exit the program successfully
+      else if(this.currToken.matches("^End\\.*$")) {
+        if(!this.currToken.endsWith(".")) {
+          if(this.itr.hasNext()) this.currToken = this.itr.next();
+          else throw new ParseError("Could not find End of program.");
+          if(!this.currToken.equals(".")) throw new ParseError("Could not find End of program.");
+        }
+        System.out.println("File parsed successfully");
+        return true;
+      }
+    } //end loop over iterator
+
+    itr = null;
+    return false;
+  } //end method parse
+} //END CLASS Gui
+
+
+/**
+  * Class Layout
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a single production.
+  *   layout ::=
+  *      Layout layout_type ':'
+  */
+class Layout extends ParseTreeNode {
+  private LayoutType childLT;
+
+  public Layout(ListIterator<String> itr) {
+    keywords = new String[]{"Layout"};
+    this.itr = itr;
+    this.haveAttr.put("ltype",false);
+  }
+
+  public boolean parse() throws ParseError {
+    if(this.itr.hasNext()) this.currToken = this.itr.next();
+    else throw new ParseError("Improper grammar when defining layout.");
+    this.childLT = new LayoutType(this.itr);
+    this.haveColon = false;
+    if(!this.childLT.isKeyword(this.currToken) || !this.childLT.parse()) return false;
+    return true;
+  }
+} //END CLASS Layout
+
+
+/**
+  * Class LayoutType
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a single production.
+  *   layout_type ::=
+  *      Flow |
+  *      Grid '(' NUMBER ',' NUMBER [',' NUMBER ',' NUMBER] ')'
+  */
+class LayoutType extends ParseTreeNode {
+  public LayoutType(ListIterator<String> itr) {
+    this.keywords = new String[]{"Flow","Grid"};
+    this.itr = itr;
+  }
+
+  public Integer[] getGaps() {return new Integer[]{this.gridHGap,this.gridVGap};}
+
+  //this.isKeyword(String) must have returned true before this method.
+  public boolean parse() throws ParseError {
+    this.haveAttr.put("keyword",false);
+    this.haveAttr.put("width",false);
+    this.haveAttr.put("height",false);
+    this.haveAttr.put("gridHGap",false);
+    this.haveAttr.put("gridVGap",false);
+    this.currToken = this.keyword;
+    System.out.println("LayoutType.parse calling parseOpenParen");
+    parseOpenParen();
+    while(this.hangingParen) parseNumber();
+    if(!this.keyword.equals("Flow") && (!this.haveAttr.get("width") || !this.haveAttr.get("height") || (this.haveAttr.get("gridHGap") ^ this.haveAttr.get("gridVGap"))))
+      throw new ParseError("Improper number of dimensions");
+    if(this.haveColon || (this.itr.hasNext() && this.itr.next().equals(":"))) return true;
+    return false;
+  }
+} //END CLASS LayoutType
+
+
+/**
+  * Class Widgets
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a single production.
+  *   widgets ::=
+  *      widget widgets |
+  *      widget
+  */
+class Widgets extends ParseTreeNode {
+  private Widget childW;
+  private Widgets childWs;  //might not exist
+
+  public Widgets(ListIterator<String> itr) {
+    this.keywords = new String[]{"Button","Group","Label","Panel","Textfield","End","Radio","Layout"};
+    this.itr = itr;
+    //this.childW = new Widget(itr); //Allocating Widgets.childW and Widget.childWs in contructor leads to recursive behavior
+  }
+
+  /*  Allocating Widgets.childW and Widget.childWs in contructor leads to recursive behavior
+  public boolean isKeyword(String s) {
+    return this.childW.isKeyword(s);
+  } //*/
+
+  //TODO
+  public boolean parse() throws ParseError {
+    this.haveAttr.put("childW",false);
+    this.haveAttr.put("childWs",false);
+
+    if(!this.haveAttr.get("childW")) {
+      this.childW = new Widget(this.itr);
+      if(!this.childW.parse()) {
+                                        System.out.println("TRAP");
+        return false;
+      }
+    }
+    if(!this.haveAttr.get("childWs")) {
+      this.childWs = new Widgets(this.itr);
+      if(!this.childWs.isKeyword(this.currToken) || !this.childWs.parse()) return false;
+      /*  NO - Widget tracks semicolon
+      if(this.currToken.equals("End;")) return true;
+      else if(this.currToken.equals("End") && this.itr.hasNext() && this.itr.next().equals(";")) return true;
+    } //*/
+    }
+    return true;
+  }
+} //END CLASS Widgets
+
+
+/**
+  * Class Widget
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a single production.
+  *   widget ::=
+  *      Button STRING ';' |
+  *      Group radio_buttons End ';' |
+  *      Label STRING ';' |
+  *      Panel layout widgets End ';' |
+  *      Textfield NUMBER ';'
+  */
+class Widget extends ParseTreeNode {
+  private RadioButtons childRBs;  //might not exist
+  private Layout childL;  //might not exist
+  private Widgets childWs;  //might not exist
+
+  public Widget(ListIterator<String> itr) {
+    this.keywords = new String[]{"Button","Group","Label","Panel","Textfield","End","Radio","Layout"};
+    this.itr = itr;
+    //Allocating Widgets.childW and Widget.childWs in contructor leads to recursive behavior
+    //this.childRBs = new RadioButtons(this.itr);
+    //this.childL = new Layout(this.itr);
+    //this.childWs = new Widgets(this.itr);
+  }
+
+  /* Allocating Widgets.childW and Widget.childWs in contructor leads to recursive behavior
+  public boolean isKeyword(String s) {
+    if(super.isKeyword(s) || this.childRBs.isKeyword(s) || this.childL.isKeyword(s) || this.childWs.isKeyword(s)) return true;
+    return false;
+  } //*/
+
+  //TODO
+  public boolean parse() throws ParseError {
+    this.haveAttr.put("name",false);
+    this.haveAttr.put("width",false);
+    this.haveAttr.put("childRBs",false);
+    this.haveAttr.put("childL",false);
+    this.haveAttr.put("childWs",false);
+    if(this.itr.hasNext()) this.currToken = this.itr.next();
+    if(this.currToken.endsWith(";")) {
+      this.haveSemi = true;
+      this.currToken = this.currToken.replace(";","");
+    }
+            System.out.println("Widget.parse currToken: "+currToken);
+    switch(this.keyword) {
+      case "Button":
+      case "Label":     parseName();
+                        break;
+      case "Textfield": parseNumber();
+                        break;
+      case "Group":     if(this.itr.hasNext()) this.currToken = this.itr.next();
+                        else throw new ParseError("Improper group definition");
+                        if(!this.childRBs.isKeyword(this.currToken) || !this.childRBs.parse()) return false;
+                        break;
+      case "Panel":                 System.out.println("TREASURE");
+                        if(this.itr.hasNext()) this.currToken = this.itr.next();
+                        else throw new ParseError("Improper group definition");
+                        System.out.println("testy");
+                        if(!this.haveAttr.get("childLayout")) {
+                          if(this.childL.isKeyword(this.currToken) && this.childL.parse()) this.haveAttr.put("childL",true);
+                          else throw new ParseError("Improper grammar when defining layout.");
+                        }
+                        break;
+      case "End":       if(!this.haveSemi && this.itr.hasNext() && this.itr.next().equals(";")) this.haveSemi = true;
+      default:          return false;
+    }
+    System.out.println("Widget.parse found keyword "+this.keyword);
+    this.haveAttr.put("keyword",true);
+    return true;
+  }
+} //END CLASS Widget
+
+
+/**
+  * Class RadioButtons
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a single production.
+  *   radio_buttons ::=
+  *      radio_button radio_buttons |
+  *      radio_button
+  */
+class RadioButtons extends ParseTreeNode {
+  private RadioButton childRB; //has to look ahead at next token
+  private RadioButtons childRBs = null;  //might not exist
+
+  public RadioButtons(ListIterator<String> itr) {
+    this.itr = itr;
+    this.childRB = new RadioButton(itr);
+  }
+
+  public boolean isKeyword(String s) {
+    return this.childRB.isKeyword(s);
+  }
+
+  //TODO
+  public boolean parse() throws ParseError {
+    this.haveAttr.put("childRB",false);
+    this.haveAttr.put("childRBs",false);
+
+    if(!this.haveAttr.get("childRB")) {
+      if(!this.childRB.parse()) return false;
+    } else if(!this.haveAttr.get("childRBs")) {
+      this.childRBs = new RadioButtons(this.itr);
+    }
+    return false;
+  }
+} //END CLASS RadioButtons
+
+
+/**
+  * Class RadioButton
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Parses a single production.
+  *   radio_button ::=
+  *      Radio STRING ';'
+  */
+class RadioButton extends ParseTreeNode {
+  public RadioButton(ListIterator<String> itr) {
+    keywords = new String[]{"Radio"};
+    this.itr = itr;
+  }
+
+  //TODO
+  public boolean parse() throws ParseError {
+
+    return false;
+  }
+} //END CLASS RadioButton
+
+
+/**
+  * Class ParseTreeNode
+  * Author: Zachary Smith
+  * Last Modified: 16 September 2019
+  * Description: Contains behavior common to nodes of the parse tree, parse tokens when building the tree
+  */
+abstract class ParseTreeNode {
+  ListIterator<String> itr;
+  TreeMap<String,Boolean> haveAttr = new TreeMap<>(); //keep track of what tokens have been parsed as window component attributes - name,width,height,childLayout,etc.
+  boolean hangingParen = false;
+  boolean haveColon = false;
+  boolean haveSemi = false;
+  String currToken = "";
+  String[] keywords;
+  String keyword = ""; //the string being tested in isKeyword(String) if matched
+  String name;
+  Integer width;
+  Integer height;
+  Integer gridHGap;
+  Integer gridVGap;
+
+  public abstract boolean parse() throws ParseError; //must be implemented by children
+  public String getName() {return this.name;}
+  public String getKeyword() {return this.keyword;}
+  public Integer[] getDims() {return new Integer[]{this.width,this.height};}
+
+  //Check with a ParseTreeNode child whether a token matches one of its keywords
+  //Edited 21 Sep 2019 so returns true if string BEGINS WITH a keyword instead of a 1-1 match, so that calling LayoutType.isKeyword(s) will set this.keyword as the layout type specified
+  public boolean isKeyword(String s) {
+      for(int i=0; i<this.keywords.length; i++)
+        if(s.startsWith(this.keywords[i])) {//if(keywords[i].equals(s)) {
+          this.keyword = s;
+          return true;
+        }
+      return false;
+  }
+
+  //Match a STRING of zero or more characters surrounded by double quotes. MODIFIES ATTRIBUTE name
+  boolean parseName() {
+    if(this.currToken.matches("^\".*\";?$")) {
+      if(this.currToken.endsWith(";")) {
+        this.currToken = this.currToken.replace(";","");
+        this.haveSemi = true;
+      }
+      this.name = this.currToken.replace("\"","");
+      this.haveAttr.put("name",true);
+      System.out.println("Found name "+this.name+" in "+this);
+      return true;
+    }
+    return false;
+  }
+
+  boolean parseOpenParen() throws ParseError {
+    //if(this.currToken.matches("^[a-zA-Z]*(\\(([0-9]*\\,)*[0-9]*)?\\)?$")) {
+      String args[] = this.currToken.split("\\(");
+      if(args.length>2) {
+        throw new ParseError("Too many open parens were found.");
+      } else if(args.length==2) { //found one open paren
+        this.hangingParen=true;
+        this.currToken=args[1];
+        parseNumber();
+      } else if(!args[0].startsWith("Flow")) {
+        if(this.itr.hasNext()) this.currToken = this.itr.next();
+        else throw new ParseError("Improper grammar when defining layout type.");
+      }
+      if(!args[0].isEmpty()) {
+        if(args[0].endsWith(":")) this.haveColon = true;
+        this.keyword=args[0].replace(":","");
+        this.haveAttr.put("keyword",true);
+        System.out.println("parseOpenParen Found keyword "+this.keyword);
+      } //could be either Flow or Grid at this point
+      if(this.keyword.equals("Flow")) {
+        return true;
+      }
+      if(!this.hangingParen) {
+        System.out.println("parseOpenParen calling parseOpenParen");
+        return parseOpenParen();
+      } //else this.currToken = this.itr.previous();
+      return true;
+    //} else return false;
+  }
+
+  boolean parseNumber() throws ParseError {
+    String args[] = this.currToken.split("\\,");
+    String operand = "";
+    for(int i=0;i<args.length;i++) {
+      if(!args[i].isEmpty()) {
+        operand = args[i];
+        break;
+      }
+    }
+    if(operand.isEmpty()) {  //if encounter a lone comma
+      if(this.itr.hasNext()) this.currToken = this.itr.next();
+      else throw new ParseError("Improper grammar for dimensions.");
+      System.out.println(currToken);
+    }
+    if(operand.endsWith(":")) {
+      operand = operand.replace(":","");
+      this.haveColon = true;
+    }
+    if(operand.endsWith(")")) {
+      operand = operand.replace(")","");
+      this.hangingParen = false;
+    }
+    try {
+      if(!this.haveAttr.get("width")) {
+        this.width = Integer.parseInt(operand);
+        this.haveAttr.put("width",true);
+        System.out.println("parseNumber found width "+this.width);
+      } else if(!this.haveAttr.get("height")) {
+        this.height = Integer.parseInt(operand);
+        this.haveAttr.put("height",true);
+        System.out.println("parseNumber found height "+this.height);
+      } else if(this.keyword.equals("Grid")) {
+        if(!this.haveAttr.get("gridHGap")) {
+          this.gridHGap = Integer.parseInt(operand);
+          this.haveAttr.put("gridHGap",true);
+          System.out.println("parseNumber found horizontal gap "+this.gridHGap);
+        } else if(!this.haveAttr.get("gridVGap")) {
+          this.gridVGap = Integer.parseInt(operand);
+          this.haveAttr.put("gridVGap",true);
+          System.out.println("parseNumber found vertical gap "+this.gridVGap);
+        } else throw new ParseError("Too many number arguments.");
+      } else throw new ParseError("Too many number arguments.");
+    } catch(NumberFormatException nfe) {
+      System.out.println(nfe);
+      throw new ParseError("Improper grammar for dimensions.");
+    }
+    this.currToken = this.currToken.replaceFirst(".*?\\,",""); //needs to be lazy
+    if(this.hangingParen && (args.length<2 || args[1].isEmpty())) {
+      if(this.itr.hasNext()) this.currToken = this.itr.next();
+      else throw new ParseError("Improper grammar for dimensions.");
+    }
+    return true;
+  }
+} //END CLASS ParseTreeNode
+
+
+/**
+  * Class ParseError
+  * Author: http://courses.ics.hawaii.edu/ReviewICS111/javanotes7.0.1-web-site/c9/s5.html
+  * Last Modified: 16 September 2019
+  * Description: Indicates that the input file's grammar is not properly formed.
+  */
+class ParseError extends Exception {
+  ParseError(String message) {
+    super(message);
+  }
+} //END CLASS ParseError
